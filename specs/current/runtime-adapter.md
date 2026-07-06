@@ -67,7 +67,9 @@ Flow:
 
 1. The frontend submits `agentId`, user message, system prompt, project ID, attachments, model, and reasoning options.
 2. The daemon uses `getAgentDef(agentId)` to find the runtime definition.
-3. The daemon creates or locates `.od/projects/<projectId>/` as the agent working directory.
+3. The daemon creates or locates the daemon-managed project working directory.
+   This spec MUST NOT define daemon data paths; read root
+   [`AGENTS.md`](../../AGENTS.md) → **Daemon data directory contract**.
 4. The daemon validates uploaded image paths and project attachment paths.
 5. The daemon combines the system prompt, working directory hint, existing file list, attachment list, and user request into one prompt.
 6. The daemon prepares additional readable directories: `skills/` and `design-systems/`.
@@ -109,14 +111,15 @@ These four runtimes currently use the unified `json-event-stream` output format,
 Codex currently uses:
 
 ```bash
-codex exec --json --skip-git-repo-check --full-auto -C <cwd> <prompt>
+codex exec --json --skip-git-repo-check --sandbox workspace-write -c sandbox_workspace_write.network_access=true -C <cwd>
 ```
 
 The current integration uses the lightweight structured path through `exec --json`. Compared with the original plain-text `codex exec`, this path adds:
 
 - `--json`: structured event output
 - `--skip-git-repo-check`: allows running in a temporary working directory
-- `--full-auto`: non-interactive automatic execution
+- `--sandbox workspace-write`: allows Codex to edit within the project workspace without using the deprecated `--full-auto` shortcut
+- `-c sandbox_workspace_write.network_access=true`: keeps network access enabled inside the workspace-write sandbox
 - `-C <cwd>`: explicit working directory
 
 The daemon currently maps:
@@ -131,10 +134,10 @@ The daemon currently maps:
 Gemini currently uses:
 
 ```bash
-gemini --output-format stream-json --skip-trust -p <prompt>
+GEMINI_CLI_TRUST_WORKSPACE=true gemini --output-format stream-json --yolo
 ```
 
-The daemon currently maps:
+The daemon delivers the prompt over stdin rather than argv. It currently maps:
 
 - `init` → `status(initializing)`
 - `message(role=assistant)` → `text_delta`
@@ -177,6 +180,26 @@ The daemon currently maps:
 - `result.usage` → `usage`
 
 Cursor outputs both partial assistant chunks and the final aggregated assistant message. The daemon currently prioritizes partial chunks and ignores the final aggregated text after partial chunks have appeared, avoiding duplicate rendering.
+
+#### Qoder
+
+Qoder currently uses:
+
+```bash
+qodercli -p --output-format stream-json --permission-mode bypass_permissions
+```
+
+The daemon delivers the composed prompt over stdin rather than argv. When runtime context is available, `--cwd <cwd>` is appended. When the user selects a model, `--model <id>` is appended. Additional readable directories are passed as repeated `--add-dir <dir>` pairs.
+
+Validated uploaded image paths are passed as repeated `--attachment <path>` pairs so Qoder receives the original multimodal context in addition to the textual `@path` prompt hint.
+
+The daemon parses Qoder stream-json output through `apps/daemon/src/qoder-stream.ts` and currently maps:
+
+- `system(subtype=init)` → `status(initializing)`
+- assistant text content blocks → `text_delta`
+- thinking content blocks → `thinking_start` / `thinking_delta`
+- assistant error records → `error`
+- result usage metadata → `usage`
 
 ### Qwen: Plain Text Pass-through
 
@@ -249,7 +272,7 @@ Existing protections include:
 - Reasoning options must exist in the runtime definition's `reasoningOptions`.
 - Image paths must be located inside the daemon temporary upload directory.
 - Attachment paths must be located inside the project working directory.
-- Agent working directories are constrained to `.od/projects/<projectId>/`.
+- Agent working directories are constrained to daemon-managed project storage.
 - ACP runtimes have timeout protection for the initialize, session/new, session/set_model, and session/prompt stages.
 - ACP runtimes listen for `stdin` errors and proactively clean up detection processes after model detection completes.
 - When the SSE connection closes, the daemon sends `SIGTERM` to the subprocess.
